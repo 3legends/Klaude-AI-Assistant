@@ -978,10 +978,13 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
   }
 
   updateApiKey(newApiKey) {
-    process.env.GEMINI_API_KEY = newApiKey;
+    // Update the config in-memory store (and process.env as a side-effect).
+    // All internal callers use config.getApiKey(), so this is the single
+    // source of truth — no stale .env reads anywhere.
+    config.setApiKey('GEMINI', newApiKey);
     this.isInitialized = false;
     this.initializeClient();
-    
+
     logger.info('API key updated and client reinitialized');
   }
 

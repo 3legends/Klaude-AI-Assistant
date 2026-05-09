@@ -381,12 +381,38 @@
                     Gemini Settings
                 </div>
                 <div class="settings-section-content">
-                    <div class="settings-item">
+                    <div class="settings-item" style="flex-direction: column; align-items: flex-start; gap: 10px;">
                         <div>
                             <div class="settings-item-label">Google API Key</div>
-                            <div class="settings-item-description">Your Google API key for Gemini models</div>
+                            <div class="settings-item-description">
+                                Get yours at <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: #888; text-decoration: underline;">aistudio.google.com</a>.
+                                Your key is encrypted and stored locally — never sent to our servers.
+                            </div>
                         </div>
-                        <input type="password" class="input-field" id="geminiKey" placeholder="Enter your Google API key">
+
+                        <!-- Key status badge -->
+                        <div id="geminiKeyStatus" style="display:none; align-items:center; gap:6px; font-size:12px; padding:4px 10px; border-radius:20px; background:rgba(74,222,128,0.12); color:#4ade80; border:1px solid rgba(74,222,128,0.25);">
+                            <i class="fas fa-lock" style="font-size:10px;"></i>
+                            <span id="geminiKeyStatusText">API key saved</span>
+                        </div>
+
+                        <!-- Key input row -->
+                        <div style="display:flex; gap:8px; width:100%; align-items:center;">
+                            <input type="password" class="input-field" id="geminiKey"
+                                placeholder="Paste new API key here (AIza…)"
+                                style="flex:1; font-family:monospace; font-size:12px; letter-spacing:0.05em;">
+                            <button id="saveGeminiKey" class="btn-secondary" style="white-space:nowrap; padding:6px 14px; font-size:12px;">
+                                Save key
+                            </button>
+                        </div>
+
+                        <!-- Test connection row -->
+                        <div style="display:flex; gap:8px; align-items:center;">
+                            <button id="testGeminiConnection" class="btn-secondary" style="padding:6px 14px; font-size:12px;">
+                                <i class="fas fa-plug" style="margin-right:5px; font-size:11px;"></i>Test connection
+                            </button>
+                            <span id="testConnectionResult" style="font-size:12px; display:none;"></span>
+                        </div>
                     </div>
                 </div>
             </div>
