@@ -60,7 +60,19 @@ class Config {
   }
 
   getApiKey(service) {
-    return this.apiKeys[service];
+    // Always read from in-memory store so keys set via setApiKey() at runtime
+    // are used even when .env is absent.
+    return this.apiKeys[service] || null;
+  }
+
+  setApiKey(service, value) {
+    this.apiKeys[service] = value || null;
+    // Keep process.env in sync for any legacy code that reads it directly.
+    if (value) {
+      process.env[service + '_API_KEY'] = value;
+    } else {
+      delete process.env[service + '_API_KEY'];
+    }
   }
 
   set(key, value) {

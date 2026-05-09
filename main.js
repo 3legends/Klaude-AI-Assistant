@@ -3,6 +3,7 @@ require("dotenv").config();
 const { app, BrowserWindow, globalShortcut, session, ipcMain } = require("electron");
 const logger = require("./src/core/logger").createServiceLogger("MAIN");
 const config = require("./src/core/config");
+const store  = require("./src/core/store");
 
 // Services
 const ocrService = require("./src/services/ocr.service");
@@ -80,8 +81,8 @@ class ApplicationController {
       await windowManager.initializeWindows();
       this.setupGlobalShortcuts();
 
-      // Initialize default stealth mode with terminal icon
-      this.updateAppIcon("terminal");
+      // ── Restore persisted preferences ──────────────────────────────────
+      this.restorePersistedSettings();
 
       this.isReady = true;
 
@@ -350,6 +351,7 @@ class ApplicationController {
 
     ipcMain.handle("set-gemini-api-key", (event, apiKey) => {
       llmService.updateApiKey(apiKey);
+      store.saveApiKey(apiKey);        // persist encrypted to disk
       return llmService.getStats();
     });
 
@@ -974,11 +976,15 @@ class ApplicationController {
   }
 
   getSettings() {
+    const prefs = store.loadPreferences();
     return {
-      codingLanguage: this.codingLanguage || "java",
-      activeSkill: this.activeSkill || "dsa",
-      appIcon: this.appIcon || "terminal",
-      selectedIcon: this.appIcon || "terminal",
+      codingLanguage : this.codingLanguage || prefs.codingLanguage || "java",
+      activeSkill    : this.activeSkill    || prefs.activeSkill    || "dsa",
+      appIcon        : this.appIcon        || prefs.appIcon        || "terminal",
+      selectedIcon   : this.appIcon        || prefs.appIcon        || "terminal",
+      windowGap      : prefs.windowGap     || 20,
+      // Never send the raw key to the renderer — only a boolean flag
+      hasGeminiKey   : prefs.hasGeminiKey,
     };
   }
 
@@ -1018,9 +1024,51 @@ class ApplicationController {
   }
 
   persistSettings(settings) {
-    // You can extend this to save to a file or database
-    // For now, we'll just keep them in memory
-    logger.debug("Settings persisted", settings);
+    // Route all settings through the store module which handles
+    // electron-store (preferences) and safeStorage (API key) correctly.
+    store.savePreferences(settings);
+  }
+
+  /**
+   * Called once on app startup — reads persisted preferences and API key,
+   * applies them to in-memory state and services.
+   */
+  restorePersistedSettings() {
+    try {
+      const prefs = store.loadPreferences();
+      logger.info("Restoring persisted settings", {
+        activeSkill    : prefs.activeSkill,
+        codingLanguage : prefs.codingLanguage,
+        appIcon        : prefs.appIcon,
+        hasGeminiKey   : prefs.hasGeminiKey,
+      });
+
+      // Apply preferences to in-memory state
+      if (prefs.codingLanguage) this.codingLanguage = prefs.codingLanguage;
+      if (prefs.activeSkill)    this.activeSkill    = prefs.activeSkill;
+      if (prefs.appIcon)        this.appIcon        = prefs.appIcon;
+
+      // Apply window gap if persisted
+      if (prefs.windowGap && windowManager.setWindowGap) {
+        windowManager.setWindowGap(Number(prefs.windowGap));
+      }
+
+      // Apply stealth icon (falls back to terminal if nothing stored)
+      this.updateAppIcon(prefs.appIcon || "terminal");
+
+      // Load and inject the Gemini API key into the LLM service
+      const apiKey = store.loadApiKey();
+      if (apiKey) {
+        llmService.updateApiKey(apiKey);
+        logger.info("Gemini API key restored from secure storage");
+      } else {
+        logger.info("No stored Gemini API key found — user will need to enter one in Settings");
+      }
+    } catch (err) {
+      logger.error("Failed to restore persisted settings", { error: err.message });
+      // Non-fatal: app continues with defaults
+      this.updateAppIcon("terminal");
+    }
   }
 
   updateAppIcon(iconKey) {
