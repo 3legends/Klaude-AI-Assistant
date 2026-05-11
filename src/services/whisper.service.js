@@ -29,6 +29,10 @@ class WhisperService extends EventEmitter {
     this.recognitionCount = 0;
     this.modelPath = null;
     this.lastError = null;
+    // Cached after first successful resolution — never re-resolved mid-session
+    this._resolvedCliPath   = null;
+    this._resolvedModelPath = null;
+    this._symlinksDone      = false;
   }
 
   /**
@@ -112,10 +116,76 @@ class WhisperService extends EventEmitter {
         fileSize: `${fs.statSync(audioFilePath).size} bytes`
       });
 
-      // Call Whisper - this is the core recognition
+      // Resolve cli + model paths once per service lifetime and cache them.
+      // Re-checking every call caused the second call to fail when dep-check
+      // returned a different model path (userData fallback) that had no
+      // corresponding whisper-cli symlink.
+      const depCheck = require('./dep-check');
+      const fsWh     = require('fs');
+      const pathWh   = require('path');
+
+      if (!this._resolvedCliPath || !this._resolvedModelPath) {
+        const modelCheck = depCheck.checkWhisperModel();
+        if (!modelCheck.ok) throw new Error('Whisper model not found. Please reinstall Klaude.');
+
+        const cliCheck = depCheck.checkWhisperCli();
+        if (!cliCheck.ok) throw new Error('whisper-cli not found. Please reinstall Klaude.');
+
+        this._resolvedModelPath = modelCheck.path;
+        this._resolvedCliPath   = cliCheck.path;
+        logger.info('Whisper paths resolved and cached', {
+          model: this._resolvedModelPath,
+          cli:   this._resolvedCliPath,
+        });
+      }
+
+      // Ensure symlinks exist in nodejs-whisper's hardcoded locations.
+      // Only done once per session (_symlinksDone flag).
+      if (!this._symlinksDone) {
+        const whisperPkgEntry = require.resolve('nodejs-whisper');
+        const whisperCppDir   = pathWh.join(pathWh.dirname(whisperPkgEntry), '..', 'cpp', 'whisper.cpp');
+
+        // Model symlink
+        const targetModelDir  = pathWh.join(whisperCppDir, 'models');
+        const modelFileName   = pathWh.basename(this._resolvedModelPath);
+        const targetModelPath = pathWh.join(targetModelDir, modelFileName);
+        fsWh.mkdirSync(targetModelDir, { recursive: true });
+        let needsModelLink = true;
+        try { fsWh.accessSync(targetModelPath); needsModelLink = false; } catch (_) {}
+        if (needsModelLink) {
+          try { fsWh.symlinkSync(this._resolvedModelPath, targetModelPath); }
+          catch (_) {
+            try { fsWh.copyFileSync(this._resolvedModelPath, targetModelPath); }
+            catch (e) { throw new Error('Could not place Whisper model: ' + e.message); }
+          }
+          logger.info('Whisper model linked to nodejs-whisper location');
+        }
+
+        // CLI symlink
+        const targetBinDir  = pathWh.join(whisperCppDir, 'build', 'bin');
+        const cliBinName    = process.platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli';
+        const targetCliPath = pathWh.join(targetBinDir, cliBinName);
+        fsWh.mkdirSync(targetBinDir, { recursive: true });
+        let needsCliLink = true;
+        try { fsWh.accessSync(targetCliPath); needsCliLink = false; } catch (_) {}
+        if (needsCliLink) {
+          try { fsWh.symlinkSync(this._resolvedCliPath, targetCliPath); }
+          catch (_) {
+            try { fsWh.copyFileSync(this._resolvedCliPath, targetCliPath); }
+            catch (e) { throw new Error('Could not place whisper-cli: ' + e.message); }
+          }
+          logger.info('whisper-cli linked to nodejs-whisper location');
+        }
+
+        this._symlinksDone = true;
+      }
+
+      const modelFileName     = pathWh.basename(this._resolvedModelPath);
+      const resolvedModelName = modelFileName.replace(/^ggml-/, '').replace(/\.bin$/, '');
+      logger.info('Calling nodewhisper', { modelName: resolvedModelName });
+
       const result = await nodewhisper(audioFilePath, {
-        modelName: this.currentModel,
-        autoDownloadModelName: this.currentModel,
+        modelName: resolvedModelName,
         removeWavFileAfterTranscription: false,
         withCuda: false,
         whisperOptions: {
@@ -202,10 +272,26 @@ class WhisperService extends EventEmitter {
       fs.writeFileSync(tmpFile, audioBuffer);
 
       try {
-        // Recognize using temporary file
+        // Recognize using temporary file.
+        // Uses the same cached paths as recognizeFromFile — no re-resolution.
+        const pathBuf = require('path');
+
+        // Ensure paths are resolved (may not have been if buffer path called first)
+        if (!this._resolvedCliPath || !this._resolvedModelPath) {
+          const depCheckBuf = require('./dep-check');
+          const modelCheckBuf = depCheckBuf.checkWhisperModel();
+          if (!modelCheckBuf.ok) throw new Error('Whisper model not found. Please reinstall Klaude.');
+          const cliCheckBuf = depCheckBuf.checkWhisperCli();
+          if (!cliCheckBuf.ok) throw new Error('whisper-cli not found. Please reinstall Klaude.');
+          this._resolvedModelPath = modelCheckBuf.path;
+          this._resolvedCliPath   = cliCheckBuf.path;
+        }
+
+        const modelFileNameBuf     = pathBuf.basename(this._resolvedModelPath);
+        const resolvedModelNameBuf = modelFileNameBuf.replace(/^ggml-/, '').replace(/\.bin$/, '');
+
         const bufResult = await nodewhisper(tmpFile, {
-          modelName: this.currentModel,
-          autoDownloadModelName: this.currentModel,
+          modelName: resolvedModelNameBuf,
           removeWavFileAfterTranscription: false,
           withCuda: false,
           whisperOptions: {

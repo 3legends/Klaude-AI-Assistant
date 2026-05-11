@@ -135,6 +135,23 @@
         "width": 600,
         "height": 400
       }
-    }
+    },
+    "extraResources": [
+      {
+        "from": "resources/whisper/macos-arm64",
+        "to": "whisper/macos-arm64",
+        "filter": [
+          "whisper-cli",
+          "ggml-base.en.bin"
+        ]
+      },
+      {
+        "from": "resources/sox/macos-arm64",
+        "to": "sox/macos-arm64",
+        "filter": [
+          "sox"
+        ]
+      }
+    ]
   }
 }

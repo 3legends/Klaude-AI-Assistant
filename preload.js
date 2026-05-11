@@ -43,6 +43,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateActiveSkill: (skill) => ipcRenderer.invoke('update-active-skill', skill),
   restartAppForStealth: () => ipcRenderer.invoke('restart-app-for-stealth'),
   closeWindow: () => ipcRenderer.invoke('close-window'),
+
+  // Setup window
+  getDepCheckResults    : ()  => ipcRenderer.invoke('get-dep-check-results'),
+  setupComplete         : ()  => ipcRenderer.invoke('setup-complete'),
+  rerunDepCheck         : ()  => ipcRenderer.invoke('rerun-dep-check'),
+  openSettingsFromSetup : ()  => ipcRenderer.invoke('open-settings-from-setup'),
+  onSetupCheckResults      : (cb) => ipcRenderer.on('setup-check-results', (_, data) => cb(data)),
+  downloadWhisperModel     : ()   => ipcRenderer.invoke('download-whisper-model'),
+  onWhisperDownloadProgress: (cb) => ipcRenderer.on('whisper-download-progress', (_, data) => cb(data)),
   quit: () => {
     try {
       ipcRenderer.send('quit-app');
