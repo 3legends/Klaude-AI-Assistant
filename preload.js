@@ -52,6 +52,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onSetupCheckResults      : (cb) => ipcRenderer.on('setup-check-results', (_, data) => cb(data)),
   downloadWhisperModel     : ()   => ipcRenderer.invoke('download-whisper-model'),
   onWhisperDownloadProgress: (cb) => ipcRenderer.on('whisper-download-progress', (_, data) => cb(data)),
+
+  // Auto-updater
+  updaterCheckForUpdates    : ()   => ipcRenderer.invoke('updater-check-for-updates'),
+  updaterQuitAndInstall     : ()   => ipcRenderer.invoke('updater-quit-and-install'),
+  updaterIsUpdateDownloaded : ()   => ipcRenderer.invoke('updater-is-update-downloaded'),
+  onAutoUpdaterEvent        : (cb) => ipcRenderer.on('auto-updater-event', (_, data) => cb(data)),
   quit: () => {
     try {
       ipcRenderer.send('quit-app');

@@ -105,6 +105,10 @@ class ApplicationController {
 
       this.isReady = true;
 
+      // ── Auto-updater ────────────────────────────────────────────────────
+      // Initialised after app is ready. Skips silently in dev mode.
+      updaterService.init();
+
       logger.info("Application initialized successfully", {
         windowCount: Object.keys(windowManager.getWindowStats().windows).length,
         currentDesktop: "detected",
@@ -239,12 +243,26 @@ class ApplicationController {
       windowManager.showSettings();
     });
 
+    // ── Auto-updater IPC ──────────────────────────────────────────────────
+    ipcMain.handle("updater-check-for-updates", () => {
+      updaterService.checkForUpdates();
+    });
+
+    ipcMain.handle("updater-quit-and-install", () => {
+      updaterService.quitAndInstall();
+    });
+
+    ipcMain.handle("updater-is-update-downloaded", () => {
+      return updaterService.isUpdateDownloaded();
+    });
+
     // ── Whisper model download with progress ──────────────────────────────
     ipcMain.handle("download-whisper-model", async (event) => {
       const https    = require('https');
       const fs       = require('fs');
       const path     = require('path');
-      const depCheck = require('./src/services/dep-check');
+      const depCheck      = require('./src/services/dep-check');
+const updaterService = require('./src/services/updater.service');
 
       const modelDir  = depCheck.getModelDir();
       const modelFile = depCheck.getModelFilePath();
