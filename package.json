@@ -68,7 +68,9 @@
       "node_modules/nodejs-whisper/**/*",
       "node_modules/ffmpeg-static/**/*",
       "node_modules/tesseract.js-core/**/*",
-      "resources/**/*"
+      "resources/**/*",
+      "eng.traineddata",
+      "node_modules/tesseract.js/**/*"
     ],
     "mac": {
       "category": "public.app-category.productivity",

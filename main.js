@@ -1,10 +1,22 @@
 require("dotenv").config();
 
+// Catch ALL unhandled rejections globally so they never crash the app silently
+process.on('unhandledRejection', (reason, promise) => {
+  // Log the error instead of crashing
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+// Catch uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+});
+
 const { app, BrowserWindow, globalShortcut, session, ipcMain } = require("electron");
 const logger = require("./src/core/logger").createServiceLogger("MAIN");
 const config = require("./src/core/config");
 const store    = require("./src/core/store");
-const depCheck = require("./src/services/dep-check");
+const depCheck       = require("./src/services/dep-check");
+const updaterService = require("./src/services/updater.service");
 
 // Services
 const ocrService = require("./src/services/ocr.service");
@@ -262,7 +274,6 @@ class ApplicationController {
       const fs       = require('fs');
       const path     = require('path');
       const depCheck      = require('./src/services/dep-check');
-const updaterService = require('./src/services/updater.service');
 
       const modelDir  = depCheck.getModelDir();
       const modelFile = depCheck.getModelFilePath();
@@ -835,6 +846,8 @@ const updaterService = require('./src/services/updater.service');
   }
 
   async triggerScreenshotOCR() {
+    logger.info('triggerScreenshotOCR: called');
+
     if (!this.isReady) {
       logger.warn("Screenshot requested before application ready");
       return;
@@ -843,9 +856,12 @@ const updaterService = require('./src/services/updater.service');
     const startTime = Date.now();
 
     try {
+      logger.info('triggerScreenshotOCR: about to call captureAndProcess');
       windowManager.showLLMLoading();
 
+      logger.info('triggerScreenshotOCR: calling ocrService.captureAndProcess()');
       const ocrResult = await ocrService.captureAndProcess();
+      logger.info('triggerScreenshotOCR: captureAndProcess returned');
 
       if (!ocrResult.text || ocrResult.text.trim().length === 0) {
         windowManager.hideLLMResponse();

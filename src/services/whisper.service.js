@@ -117,11 +117,11 @@ class WhisperService extends EventEmitter {
       });
 
       // Resolve cli + model paths once per service lifetime and cache them.
-      // Re-checking every call caused the second call to fail when dep-check
-      // returned a different model path (userData fallback) that had no
-      // corresponding whisper-cli symlink.
+      // Resolve cli + model paths once per service lifetime and cache.
+      // NEVER use require.resolve('nodejs-whisper') in packaged app —
+      // it points inside app.asar which is read-only (no mkdir/symlink).
+      // Instead we call whisper-cli directly via execFile.
       const depCheck = require('./dep-check');
-      const fsWh     = require('fs');
       const pathWh   = require('path');
 
       if (!this._resolvedCliPath || !this._resolvedModelPath) {
@@ -133,77 +133,39 @@ class WhisperService extends EventEmitter {
 
         this._resolvedModelPath = modelCheck.path;
         this._resolvedCliPath   = cliCheck.path;
+
+        // Ensure cli is executable
+        try {
+          const fsWh = require('fs');
+          if (process.platform !== 'win32') fsWh.chmodSync(this._resolvedCliPath, 0o755);
+        } catch (_) {}
+
         logger.info('Whisper paths resolved and cached', {
           model: this._resolvedModelPath,
           cli:   this._resolvedCliPath,
         });
       }
 
-      // Ensure symlinks exist in nodejs-whisper's hardcoded locations.
-      // Only done once per session (_symlinksDone flag).
-      if (!this._symlinksDone) {
-        const whisperPkgEntry = require.resolve('nodejs-whisper');
-        const whisperCppDir   = pathWh.join(pathWh.dirname(whisperPkgEntry), '..', 'cpp', 'whisper.cpp');
-
-        // Model symlink
-        const targetModelDir  = pathWh.join(whisperCppDir, 'models');
-        const modelFileName   = pathWh.basename(this._resolvedModelPath);
-        const targetModelPath = pathWh.join(targetModelDir, modelFileName);
-        fsWh.mkdirSync(targetModelDir, { recursive: true });
-        let needsModelLink = true;
-        try { fsWh.accessSync(targetModelPath); needsModelLink = false; } catch (_) {}
-        if (needsModelLink) {
-          try { fsWh.symlinkSync(this._resolvedModelPath, targetModelPath); }
-          catch (_) {
-            try { fsWh.copyFileSync(this._resolvedModelPath, targetModelPath); }
-            catch (e) { throw new Error('Could not place Whisper model: ' + e.message); }
-          }
-          logger.info('Whisper model linked to nodejs-whisper location');
-        }
-
-        // CLI symlink
-        const targetBinDir  = pathWh.join(whisperCppDir, 'build', 'bin');
-        const cliBinName    = process.platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli';
-        const targetCliPath = pathWh.join(targetBinDir, cliBinName);
-        fsWh.mkdirSync(targetBinDir, { recursive: true });
-        let needsCliLink = true;
-        try { fsWh.accessSync(targetCliPath); needsCliLink = false; } catch (_) {}
-        if (needsCliLink) {
-          try { fsWh.symlinkSync(this._resolvedCliPath, targetCliPath); }
-          catch (_) {
-            try { fsWh.copyFileSync(this._resolvedCliPath, targetCliPath); }
-            catch (e) { throw new Error('Could not place whisper-cli: ' + e.message); }
-          }
-          logger.info('whisper-cli linked to nodejs-whisper location');
-        }
-
-        this._symlinksDone = true;
-      }
-
-      const modelFileName     = pathWh.basename(this._resolvedModelPath);
-      const resolvedModelName = modelFileName.replace(/^ggml-/, '').replace(/\.bin$/, '');
-      logger.info('Calling nodewhisper', { modelName: resolvedModelName });
-
-      const result = await nodewhisper(audioFilePath, {
-        modelName: resolvedModelName,
-        removeWavFileAfterTranscription: false,
-        withCuda: false,
-        whisperOptions: {
-          outputInText: true,
-          outputInSrt: false,
-          outputInVtt: false,
-          outputInCsv: false,
-          outputInJson: false,
-          translateToEnglish: false,
-          wordTimestamps: false,
-          language: 'auto'
-        }
+      // Call whisper-cli directly — bypasses nodejs-whisper path resolution
+      // entirely so it works identically in dev and packaged app.
+      logger.info('Calling whisper-cli directly', {
+        cli:   this._resolvedCliPath,
+        model: this._resolvedModelPath,
       });
-      // nodewhisper returns an array of segments [{start, end, speech}]
-      // join them all into one transcript string
-      const transcript = Array.isArray(result)
-        ? result.map(s => (s.speech || s.text || '')).join(' ').trim()
-        : (typeof result === 'string' ? result.trim() : '');
+
+      const rawOutput = await this._runWhisperCli(audioFilePath);
+
+      // Parse timestamp lines: [00:00:00.000 --> 00:00:02.000]   text
+      const transcript = rawOutput
+        .split('\n')
+        .filter(line => line.match(/\[\d{2}:\d{2}:\d{2}/))
+        .map(line => line.replace(/\[.*?\]\s*/, '').trim())
+        .filter(t => t.length > 0)
+        .join(' ')
+        .trim()
+        ||
+        // Fallback: strip all timestamp lines and return plain text
+        rawOutput.replace(/\[.*?\]/g, '').replace(/\s+/g, ' ').trim();
 
       const duration = Date.now() - startTime;
       const textLength = transcript.length;
@@ -248,6 +210,67 @@ class WhisperService extends EventEmitter {
   }
 
   /**
+   * Run whisper-cli directly via execFile.
+   * Works in both dev (node_modules binary) and packaged app (bundled binary).
+   * Never touches app.asar so no ENOTDIR errors.
+   */
+  _runWhisperCli(audioFilePath) {
+    return new Promise((resolve, reject) => {
+      const { execFile } = require('child_process');
+      const fs   = require('fs');
+      const path = require('path');
+      const os   = require('os');
+
+      const cliPath   = this._resolvedCliPath;
+      const modelPath = this._resolvedModelPath;
+
+      // whisper-cli writes output to <audioFile>.txt
+      // We pass -otxt and read that file after execution
+      const args = [
+        '-m', modelPath,
+        '-f', audioFilePath,
+        '-l', 'en',
+        '-otxt',
+        '--no-timestamps',
+      ];
+
+      logger.info('Executing whisper-cli', { cliPath, args: args.join(' ') });
+
+      execFile(cliPath, args, {
+        timeout: 60000,
+        maxBuffer: 10 * 1024 * 1024,
+        env: { ...process.env }
+      }, (err, stdout, stderr) => {
+        // whisper-cli writes transcript to <audioFile>.txt
+        const txtFile = audioFilePath + '.txt';
+        if (fs.existsSync(txtFile)) {
+          try {
+            const text = fs.readFileSync(txtFile, 'utf8').trim();
+            // Clean up txt file
+            try { fs.unlinkSync(txtFile); } catch (_) {}
+            logger.info('whisper-cli output read from txt file', { chars: text.length });
+            resolve(text);
+            return;
+          } catch (readErr) {
+            // fall through to stdout
+          }
+        }
+
+        // Fallback: use stdout if txt file not found
+        if (err && !stdout) {
+          logger.error('whisper-cli execution failed', { error: err.message, stderr });
+          reject(new Error('whisper-cli failed: ' + (err.message || stderr)));
+          return;
+        }
+
+        const output = stdout || stderr || '';
+        logger.info('whisper-cli stdout fallback', { chars: output.length });
+        resolve(output);
+      });
+    });
+  }
+
+  /**
    * Recognize from audio buffer (for streaming/real-time)
    * 
    * @param {Buffer} audioBuffer - Audio data as buffer
@@ -272,42 +295,28 @@ class WhisperService extends EventEmitter {
       fs.writeFileSync(tmpFile, audioBuffer);
 
       try {
-        // Recognize using temporary file.
-        // Uses the same cached paths as recognizeFromFile — no re-resolution.
-        const pathBuf = require('path');
-
-        // Ensure paths are resolved (may not have been if buffer path called first)
+        // Recognize using temporary file via direct whisper-cli call.
+        // Same approach as recognizeFromFile — no asar touching.
         if (!this._resolvedCliPath || !this._resolvedModelPath) {
-          const depCheckBuf = require('./dep-check');
+          const depCheckBuf   = require('./dep-check');
           const modelCheckBuf = depCheckBuf.checkWhisperModel();
           if (!modelCheckBuf.ok) throw new Error('Whisper model not found. Please reinstall Klaude.');
           const cliCheckBuf = depCheckBuf.checkWhisperCli();
           if (!cliCheckBuf.ok) throw new Error('whisper-cli not found. Please reinstall Klaude.');
           this._resolvedModelPath = modelCheckBuf.path;
           this._resolvedCliPath   = cliCheckBuf.path;
+          try {
+            const fsChmod = require('fs');
+            if (process.platform !== 'win32') fsChmod.chmodSync(this._resolvedCliPath, 0o755);
+          } catch (_) {}
         }
 
-        const modelFileNameBuf     = pathBuf.basename(this._resolvedModelPath);
-        const resolvedModelNameBuf = modelFileNameBuf.replace(/^ggml-/, '').replace(/\.bin$/, '');
-
-        const bufResult = await nodewhisper(tmpFile, {
-          modelName: resolvedModelNameBuf,
-          removeWavFileAfterTranscription: false,
-          withCuda: false,
-          whisperOptions: {
-            outputInText: true,
-            outputInSrt: false,
-            outputInVtt: false,
-            outputInCsv: false,
-            outputInJson: false,
-            translateToEnglish: false,
-            wordTimestamps: false,
-            language: 'auto'
-          }
-        });
-        const transcript = Array.isArray(bufResult)
-          ? bufResult.map(s => (s.speech || s.text || '')).join(' ').trim()
-          : (typeof bufResult === 'string' ? bufResult.trim() : '');
+        const rawBufOutput = await this._runWhisperCli(tmpFile);
+        const transcript = rawBufOutput
+          .split('\n')
+          .filter(line => line.trim().length > 0)
+          .join(' ')
+          .trim();
 
         logger.info('Buffer recognition completed', {
           duration: Date.now() - startTime,
