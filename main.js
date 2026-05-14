@@ -3,7 +3,8 @@ require("dotenv").config();
 const { app, BrowserWindow, globalShortcut, session, ipcMain } = require("electron");
 const logger = require("./src/core/logger").createServiceLogger("MAIN");
 const config = require("./src/core/config");
-const store  = require("./src/core/store");
+const store    = require("./src/core/store");
+const depCheck = require("./src/services/dep-check");
 
 // Services
 const ocrService = require("./src/services/ocr.service");
@@ -34,6 +35,19 @@ class ApplicationController {
   setupStealth() {
     if (config.get("stealth.disguiseProcess")) {
       process.title = config.get("app.processTitle");
+    }
+
+    // Capture the real userData path BEFORE app.setName() changes it.
+    // dep-check.js reads this env var to avoid the "Terminal /models" corruption.
+    if (!process.env.KLAUDE_USER_DATA) {
+      try {
+        process.env.KLAUDE_USER_DATA = app.getPath('userData');
+        logger.info('userData path captured before stealth rename', {
+          path: process.env.KLAUDE_USER_DATA
+        });
+      } catch (_) {
+        // app.getPath may not be available this early on some platforms — dep-check fallback handles it
+      }
     }
 
     // Set default stealth app name early
@@ -84,7 +98,16 @@ class ApplicationController {
       // ── Restore persisted preferences ──────────────────────────────────
       this.restorePersistedSettings();
 
+      // ── First-run / dependency check ────────────────────────────────────
+      // Run dep checks every launch so we catch newly-broken deps.
+      // Show the setup window if this is first run OR any check failed.
+      this.checkDependenciesAndMaybeShowSetup();
+
       this.isReady = true;
+
+      // ── Auto-updater ────────────────────────────────────────────────────
+      // Initialised after app is ready. Skips silently in dev mode.
+      updaterService.init();
 
       logger.info("Application initialized successfully", {
         windowCount: Object.keys(windowManager.getWindowStats().windows).length,
@@ -198,6 +221,142 @@ class ApplicationController {
 
   setupIPCHandlers() {
     ipcMain.handle("take-screenshot", () => this.triggerScreenshotOCR());
+
+    // ── Setup window IPC ──────────────────────────────────────────────────
+    ipcMain.handle("get-dep-check-results", () => {
+      return depCheck.runAllChecks();
+    });
+
+    ipcMain.handle("setup-complete", () => {
+      store.setPreference('firstRunComplete', true);
+      windowManager.closeSetup();
+      logger.info("First-run setup completed");
+    });
+
+    ipcMain.handle("rerun-dep-check", () => {
+      const results = depCheck.runAllChecks();
+      windowManager.showSetup(results);
+      return results;
+    });
+
+    ipcMain.handle("open-settings-from-setup", () => {
+      windowManager.showSettings();
+    });
+
+    // ── Auto-updater IPC ──────────────────────────────────────────────────
+    ipcMain.handle("updater-check-for-updates", () => {
+      updaterService.checkForUpdates();
+    });
+
+    ipcMain.handle("updater-quit-and-install", () => {
+      updaterService.quitAndInstall();
+    });
+
+    ipcMain.handle("updater-is-update-downloaded", () => {
+      return updaterService.isUpdateDownloaded();
+    });
+
+    // ── Whisper model download with progress ──────────────────────────────
+    ipcMain.handle("download-whisper-model", async (event) => {
+      const https    = require('https');
+      const fs       = require('fs');
+      const path     = require('path');
+      const depCheck      = require('./src/services/dep-check');
+const updaterService = require('./src/services/updater.service');
+
+      const modelDir  = depCheck.getModelDir();
+      const modelFile = depCheck.getModelFilePath();
+      const MODEL_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin';
+
+      // Ensure models directory exists
+      fs.mkdirSync(modelDir, { recursive: true });
+
+      // If already downloaded, return immediately
+      if (fs.existsSync(modelFile)) {
+        const size = fs.statSync(modelFile).size;
+        if (size > 100 * 1024 * 1024) {  // >100MB = valid
+          return { success: true, alreadyExists: true };
+        }
+        // Partial file — delete and re-download
+        fs.unlinkSync(modelFile);
+      }
+
+      return new Promise((resolve) => {
+        const sendProgress = (pct, label) => {
+          // Broadcast to all windows so setup window gets it
+          const { BrowserWindow } = require('electron');
+          BrowserWindow.getAllWindows().forEach(w => {
+            w.webContents.send('whisper-download-progress', { pct, label });
+          });
+        };
+
+        const doRequest = (url, redirectCount = 0) => {
+          if (redirectCount > 5) {
+            resolve({ success: false, error: 'Too many redirects' });
+            return;
+          }
+
+          https.get(url, { headers: { 'User-Agent': 'Klaude/1.0' } }, (res) => {
+            // Handle redirects (HuggingFace uses them)
+            if (res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 307 || res.statusCode === 308) {
+              doRequest(res.headers.location, redirectCount + 1);
+              return;
+            }
+
+            if (res.statusCode !== 200) {
+              resolve({ success: false, error: `HTTP ${res.statusCode}` });
+              return;
+            }
+
+            const total    = parseInt(res.headers['content-length'] || '0', 10);
+            let received   = 0;
+            let lastPct    = -1;
+
+            const dest = fs.createWriteStream(modelFile);
+            sendProgress(0, 'Starting download…');
+
+            res.on('data', (chunk) => {
+              received += chunk.length;
+              if (total > 0) {
+                const pct = Math.floor((received / total) * 100);
+                if (pct !== lastPct) {
+                  lastPct = pct;
+                  const mb = (received / 1024 / 1024).toFixed(1);
+                  const tb = (total   / 1024 / 1024).toFixed(1);
+                  sendProgress(pct, `${mb} MB / ${tb} MB`);
+                }
+              }
+            });
+
+            res.pipe(dest);
+
+            dest.on('finish', () => {
+              dest.close();
+              sendProgress(100, 'Download complete');
+              logger.info('Whisper model downloaded', { path: modelFile });
+              resolve({ success: true });
+            });
+
+            dest.on('error', (err) => {
+              fs.unlink(modelFile, () => {});
+              logger.error('Whisper model download failed (write)', { error: err.message });
+              resolve({ success: false, error: err.message });
+            });
+
+            res.on('error', (err) => {
+              fs.unlink(modelFile, () => {});
+              logger.error('Whisper model download failed (network)', { error: err.message });
+              resolve({ success: false, error: err.message });
+            });
+          }).on('error', (err) => {
+            logger.error('Whisper model download failed (request)', { error: err.message });
+            resolve({ success: false, error: err.message });
+          });
+        };
+
+        doRequest(MODEL_URL);
+      });
+    });
 
     ipcMain.handle("start-speech-recognition", async () => {
       try {
@@ -1033,6 +1192,31 @@ class ApplicationController {
    * Called once on app startup — reads persisted preferences and API key,
    * applies them to in-memory state and services.
    */
+  // ── Dependency check & first-run gate ──────────────────────────────────────
+
+  checkDependenciesAndMaybeShowSetup() {
+    try {
+      const isFirstRun = !store.getPreference('firstRunComplete', false);
+      const results    = depCheck.runAllChecks();
+
+      logger.info('Dependency check results', {
+        firstRun : isFirstRun,
+        gemini   : results.gemini.ok,
+        sox      : results.sox.ok,
+        whisper  : results.whisper.ok,
+        allOk    : results.allOk,
+      });
+
+      // Show setup window if first run OR any dep is missing/broken
+      if (isFirstRun || !results.allOk) {
+        windowManager.showSetup(results);
+      }
+    } catch (err) {
+      logger.error('Dependency check failed', { error: err.message });
+      // Non-fatal — app continues without showing setup
+    }
+  }
+
   restorePersistedSettings() {
     try {
       const prefs = store.loadPreferences();

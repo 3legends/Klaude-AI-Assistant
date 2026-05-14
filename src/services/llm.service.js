@@ -28,7 +28,10 @@ class LLMService {
     try {
       this.client = new GoogleGenerativeAI(apiKey);
       this.model = this.client.getGenerativeModel({ 
-        model: config.get('llm.gemini.model') 
+        model: config.get('llm.gemini.model'),
+        generationConfig: {
+          thinkingConfig: { thinkingBudget: 0 }
+        }
       });
       this.isInitialized = true;
       

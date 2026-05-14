@@ -67,6 +67,23 @@ class WindowManager {
         alwaysOnTop: true,
         visibleOnAllWorkspaces: true,
         fullscreenable: false
+      },
+      setup: {
+        width: 540,
+        height: 660,
+        file: 'setup.html',
+        title: 'Klaude Setup',
+        frame: false,
+        titleBarStyle: 'hidden',
+        transparent: true,
+        skipTaskbar: false,
+        resizable: false,
+        minimizable: false,
+        maximizable: false,
+        closable: false,
+        alwaysOnTop: true,
+        visibleOnAllWorkspaces: true,
+        fullscreenable: false
       }
     };
 
@@ -91,6 +108,7 @@ class WindowManager {
       await this.createChatWindow();
       await this.createLLMResponseWindow();
       await this.createSettingsWindow();
+      await this.createSetupWindow();
       
       this.setupWindowEventHandlers();
       this.setupScreenTracking();
@@ -181,6 +199,16 @@ class WindowManager {
     return window;
   }
 
+  async createSetupWindow() {
+    if (this.windows.has('setup')) {
+      return this.windows.get('setup');
+    }
+    const window = await this.createWindow('setup');
+    this.windows.set('setup', window);
+    window.hide();
+    return window;
+  }
+
   async createWindow(type, showOnCreate = false) {
     const windowConfig = this.windowConfigs[type];
     if (!windowConfig) {
@@ -213,8 +241,8 @@ class WindowManager {
     // Type-specific window configurations
     let browserWindowOptions;
     
-    if (type === 'settings') {
-      // Completely minimal settings window - no decorations at all
+    if (type === 'settings' || type === 'setup') {
+      // Settings and setup share the same frameless transparent style
       browserWindowOptions = {
         ...baseOptions,
         frame: false,
@@ -223,11 +251,11 @@ class WindowManager {
         resizable: false,
         minimizable: false,
         maximizable: false,
+        // setup CAN be closed via Continue button (setupComplete IPC)
         closable: false,
-        hasShadow: false,
+        hasShadow: true,
         backgroundColor: '#00000000',
         level: process.platform === 'darwin' ? 'floating' : undefined,
-        // Additional macOS flags for better always-on-top behavior
         ...(process.platform === 'darwin' && {
           type: 'panel',
           acceptFirstMouse: true,
@@ -1196,6 +1224,29 @@ class WindowManager {
     const settingsWindow = this.windows.get('settings');
     if (settingsWindow) {
       settingsWindow.hide();
+    }
+  }
+
+  showSetup(checkResults) {
+    const setupWindow = this.windows.get('setup');
+    if (!setupWindow) return;
+    this.centerWindow(setupWindow);
+    setupWindow.show();
+    setupWindow.focus();
+    // Send check results once renderer is ready
+    const send = () => setupWindow.webContents.send('setup-check-results', checkResults);
+    if (setupWindow.webContents.isLoading()) {
+      setupWindow.webContents.once('did-finish-load', send);
+    } else {
+      setTimeout(send, 80);
+    }
+    logger.info('Setup window shown');
+  }
+
+  closeSetup() {
+    const setupWindow = this.windows.get('setup');
+    if (setupWindow) {
+      setupWindow.hide();
     }
   }
 
