@@ -21,7 +21,8 @@
     "dist:mac": "electron-builder --mac",
     "dist:mac-arm": "electron-builder --mac --arm64",
     "dist:mac-x64": "electron-builder --mac --x64",
-    "dist:win": "electron-builder --win"
+    "dist:win": "electron-builder --win",
+    "dist:all": "npm run dist:mac-arm && npm run dist:mac-x64 && npm run dist:win -- --publish always"
   },
   "author": "Klaude Team",
   "license": "ISC",
@@ -74,7 +75,7 @@
     ],
     "mac": {
       "category": "public.app-category.productivity",
-      "icon": "assets/icon.icns",
+      "icon": "assets/icons/appIcon.png",
       "identity": null,
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
@@ -96,8 +97,14 @@
       ]
     },
     "win": {
-      "icon": "assets/icon.ico",
+      "icon": "assests/icons/appIcon.png",
       "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
         {
           "target": "portable",
           "arch": [
@@ -105,7 +112,8 @@
           ]
         }
       ],
-      "artifactName": "${productName}-${version}-portable.${ext}"
+      "certificateFile": null,
+      "certificatePassword": null
     },
     "linux": {
       "target": [
@@ -127,7 +135,10 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Klaude"
     },
     "dmg": {
       "sign": false,
