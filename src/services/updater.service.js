@@ -1,185 +1,113 @@
-const fs = require('fs');
-const path = require('path');
-const { exec } = require('child_process');
-const logger = require('../core/logger').createServiceLogger('OCR');
-const config = require('../core/config');
+/**
+ * updater.service.js
+ * Auto-update via electron-updater + GitHub Releases.
+ * - Checks silently 3s after launch
+ * - Downloads in background
+ * - Shows banner in main window when ready
+ * - Installs on next quit
+ * - All errors are non-fatal — never crashes the app
+ */
 
-// Lazy-load Electron modules only when needed
-let desktopCapturer = null;
-function getDesktopCapturer() {
-  if (!desktopCapturer) {
-    console.log('[OCR] Lazy loading desktopCapturer');
-    desktopCapturer = require('electron').desktopCapturer;
-  }
-  return desktopCapturer;
-}
+const { autoUpdater } = require('electron-updater');
+const { app, BrowserWindow } = require('electron');
+const logger = require('../core/logger').createServiceLogger('UPDATER');
 
-// Lazy-load Tesseract only when needed
-let Tesseract = null;
-function getTesseract() {
-  if (!Tesseract) {
-    console.log('[OCR] Lazy loading Tesseract.js');
-    Tesseract = require('tesseract.js');
-  }
-  return Tesseract;
-}
-
-class OCRService {
+class UpdaterService {
   constructor() {
-    this.isProcessing = false;
-    this.tempFiles = new Set();
+    this._updateDownloaded = false;
+    this._checking         = false;
   }
 
-  async captureAndProcess() {
-    console.log('[OCR] captureAndProcess: ==== START ====');
+  init() {
+    if (!app.isPackaged) {
+      logger.info('Skipping auto-update check (development mode)');
+      return;
+    }
+
+    this._configure();
+    this._registerListeners();
+    setTimeout(() => this.checkForUpdates(), 3000);
+  }
+
+  _configure() {
+    autoUpdater.autoDownload         = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.autoRunAppAfterInstall = true;
+    logger.info('Auto-updater configured', { channel: autoUpdater.channel || 'latest' });
+  }
+
+  _registerListeners() {
+    autoUpdater.on('checking-for-update', () => {
+      this._checking = true;
+      logger.info('Checking for updates…');
+    });
+
+    autoUpdater.on('update-available', (info) => {
+      this._checking = false;
+      logger.info('Update available', { version: info.version });
+      this._notifyAllWindows('update-available', { version: info.version, notes: info.releaseNotes || '' });
+    });
+
+    autoUpdater.on('update-not-available', (info) => {
+      this._checking = false;
+      logger.info('App is up to date', { version: info.version });
+    });
+
+    autoUpdater.on('download-progress', (progress) => {
+      this._notifyAllWindows('update-download-progress', { percent: Math.round(progress.percent) });
+    });
+
+    autoUpdater.on('update-downloaded', (info) => {
+      this._updateDownloaded = true;
+      logger.info('Update downloaded — will install on next quit', { version: info.version });
+      this._notifyAllWindows('update-downloaded', { version: info.version, notes: info.releaseNotes || '' });
+    });
+
+    autoUpdater.on('error', (err) => {
+      this._checking = false;
+      logger.warn('Auto-update error (non-fatal)', { error: err.message });
+    });
+  }
+
+  checkForUpdates() {
+    if (!app.isPackaged) return;
+    if (this._checking) return;
     try {
-      if (this.isProcessing) {
-        throw new Error('OCR operation already in progress');
+      const result = autoUpdater.checkForUpdates();
+      if (result && typeof result.then === 'function') {
+        result.catch(err => {
+          this._checking = false;
+          logger.warn('checkForUpdates rejected (non-fatal)', { error: err.message || String(err) });
+        });
       }
+    } catch (err) {
+      this._checking = false;
+      logger.warn('checkForUpdates threw (non-fatal)', { error: err.message });
+    }
+  }
 
-      this.isProcessing = true;
-      console.log('[OCR] captureAndProcess: set isProcessing true');
+  quitAndInstall() {
+    if (this._updateDownloaded) {
+      logger.info('User triggered quit and install');
+      autoUpdater.quitAndInstall(false, true);
+    }
+  }
 
-      const startTime = Date.now();
-      console.log('[OCR] captureAndProcess: about to call captureScreenshot');
+  isUpdateDownloaded() {
+    return this._updateDownloaded;
+  }
 
-      const screenshot = await this.captureScreenshot();
-      console.log('[OCR] captureAndProcess: captureScreenshot done');
-
-      const extractedText = await this.performOCR(screenshot);
-      console.log('[OCR] captureAndProcess: performOCR done');
-
-      this.isProcessing = false;
-      this.cleanup();
-
-      return {
-        text: extractedText.trim(),
-        metadata: {
-          timestamp: new Date().toISOString(),
-          source: screenshot.metadata,
-          processingTime: Date.now() - startTime
+  _notifyAllWindows(channel, data) {
+    try {
+      BrowserWindow.getAllWindows().forEach(win => {
+        if (!win.isDestroyed() && win.webContents) {
+          win.webContents.send('auto-updater-event', { type: channel, ...data });
         }
-      };
-    } catch (error) {
-      console.error('[OCR] captureAndProcess: ERROR:', error.message, error.stack);
-      this.isProcessing = false;
-      this.cleanup();
-      throw error;
+      });
+    } catch (err) {
+      logger.warn('Failed to notify windows', { error: err.message });
     }
-  }
-
-  async captureScreenshot() {
-    console.log('[OCR] captureScreenshot: calling getSources');
-    const dc = getDesktopCapturer();
-
-    const sources = await dc.getSources({
-      types: ['screen'],
-      thumbnailSize: { width: 1920, height: 1080 }
-    });
-
-    console.log('[OCR] captureScreenshot: got sources', { count: sources.length });
-
-    if (sources.length === 0) {
-      throw new Error('No screen sources available for capture');
-    }
-
-    const primarySource = sources[0];
-    const image = primarySource.thumbnail;
-
-    if (!image) {
-      throw new Error('Failed to capture screen thumbnail');
-    }
-
-    console.log('[OCR] captureScreenshot: done, image size:', image.getSize());
-
-    return {
-      image,
-      metadata: {
-        sourceName: primarySource.name,
-        dimensions: image.getSize(),
-        captureTime: new Date().toISOString()
-      }
-    };
-  }
-
-  async performOCR(screenshot) {
-    console.log('[OCR] performOCR: creating temp file');
-    const tempPath = this.createTempFile(screenshot.image);
-    console.log('[OCR] performOCR: temp file created at', tempPath);
-
-    console.log('[OCR] performOCR: calling Tesseract.recognize');
-    const Tess = getTesseract();
-
-    // In packaged app process.cwd() = '/' so Tesseract can't find eng.traineddata.
-    // Resolve the correct path based on whether app is packaged or not.
-    const { app } = require('electron');
-    const langPath = app.isPackaged
-      ? path.join(process.resourcesPath, 'app.asar.unpacked')
-      : path.join(__dirname, '..', '..');
-
-    console.log('[OCR] performOCR: langPath =', langPath, '| isPackaged =', app.isPackaged);
-
-    const { data: { text } } = await Tess.recognize(tempPath, 'eng', {
-      langPath,
-      logger: m => {
-        if (m.status === 'recognizing text') {
-          console.log('[OCR] progress:', Math.round(m.progress * 100) + '%');
-        }
-      }
-    });
-    console.log('[OCR] performOCR: Tesseract returned', { textLength: text.length });
-
-    const cleanText = this.sanitizeText(text);
-    return cleanText;
-  }
-
-  createTempFile(image) {
-    const tempDir = config.get('ocr.tempDir') || '/tmp/klaude-ocr';
-    const tempPath = path.join(
-      tempDir,
-      `Klaude-screenshot-${Date.now()}-${Math.random().toString(36).substr(2, 9)}.png`
-    );
-
-    console.log('[OCR] createTempFile: mkdir for', tempDir);
-    fs.mkdirSync(path.dirname(tempPath), { recursive: true });
-
-    const buffer = image.toPNG();
-    console.log('[OCR] createTempFile: writing PNG, size:', buffer.length);
-    fs.writeFileSync(tempPath, buffer);
-
-    this.tempFiles.add(tempPath);
-    return tempPath;
-  }
-
-  sanitizeText(text) {
-    return text
-      .replace(/\s+/g, ' ')
-      .replace(/[^\x20-\x7E\n]/g, '')
-      .trim();
-  }
-
-  cleanup() {
-    console.log('[OCR] cleanup: cleaning', this.tempFiles.size, 'files');
-    for (const tempFile of this.tempFiles) {
-      try {
-        fs.unlinkSync(tempFile);
-      } catch (error) {
-        console.error('[OCR] cleanup: failed to delete', tempFile, error.message);
-      }
-    }
-    this.tempFiles.clear();
-  }
-
-  getStatus() {
-    return {
-      isProcessing: this.isProcessing,
-      tempFilesCount: this.tempFiles.size,
-      config: {
-        language: config.get('ocr.language'),
-        tempDir: config.get('ocr.tempDir')
-      }
-    };
   }
 }
 
-module.exports = new OCRService();
+module.exports = new UpdaterService();
