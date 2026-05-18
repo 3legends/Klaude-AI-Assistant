@@ -1,6 +1,6 @@
 {
   "name": "Klaude",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Professional Interview Assistant with Invisible Screen Overlay",
   "main": "main.js",
   "scripts": {
