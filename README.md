@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/186d5458-7e8b-406a-9adc-ce755256298c" 
+  <img width="256" height="256" alt="appIcon" src="https://github.com/user-attachments/assets/1e628ea5-b901-40b0-bb00-29f64ed9b148"
        alt="Group 14" 
        width="300" 
        style="padding: 10px; border-radius: 8px;"/>
@@ -12,7 +12,6 @@
 An AI-powered desktop tool that helps you excel in technical and professional interviews by providing intelligent, real-time assistance while remaining completely invisible to screen sharing and recording software.
 
 ### Demo
-https://github.com/user-attachments/assets/c5616482-3652-4686-b87b-e04d06572d2f
 
 ## Perfect for Interviews
 **Completely Stealth** - Invisible to Zoom, Teams, Meet, and all screen sharing tools
