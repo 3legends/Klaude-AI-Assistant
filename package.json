@@ -1,6 +1,6 @@
 {
   "name": "Klaude",
-  "version": "1.0.1",
+  "version": "1.0.0",
   "description": "Professional Interview Assistant with Invisible Screen Overlay",
   "main": "main.js",
   "scripts": {
@@ -173,6 +173,37 @@
         "to": "sox/macos-arm64",
         "filter": [
           "sox"
+        ]
+      },
+      {
+        "from": "resources/whisper/macos-x64",
+        "to": "whisper/macos-x64",
+        "filter": [
+          "whisper-cli",
+          "ggml-base.en.bin"
+        ]
+      },
+      {
+        "from": "resources/sox/macos-x64",
+        "to": "sox/macos-x64",
+        "filter": [
+          "sox"
+        ]
+      },
+      {
+        "from": "resources/whisper/windows-x64",
+        "to": "whisper/windows-x64",
+        "filter": [
+          "whisper-cli.exe",
+          "ggml-base.en.bin"
+        ]
+      },
+      {
+        "from": "resources/sox/windows-x64",
+        "to": "sox/windows-x64",
+        "filter": [
+          "sox.exe",
+          "sox.exe.manifest"
         ]
       }
     ],
