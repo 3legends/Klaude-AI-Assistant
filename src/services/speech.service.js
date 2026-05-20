@@ -123,23 +123,13 @@ class SpeechService extends EventEmitter {
         throw new Error('node-record-lpcm16 not available');
       }
 
-      const isWindows = process.platform === 'win32';
-
-      // Windows requires explicit waveaudio driver for sox to capture audio.
-      // Without it sox starts but reads 0 bytes and times out immediately.
-      const recorderOptions = {
+      this.recording = recorder.record({
         sampleRateHertz: 16000,
         threshold: 0,
         verbose: false,
         recordProgram: 'sox',
-        silence: '10.0s',
-        ...(isWindows && {
-          audioType: 'waveaudio',
-          device: 'default',
-        }),
-      };
-
-      this.recording = recorder.record(recorderOptions);
+        silence: '10.0s'   // auto-stop after 10s silence (same as Azure version)
+      });
 
       logger.info('Microphone capture started');
 
@@ -183,10 +173,7 @@ class SpeechService extends EventEmitter {
   }
 
   _startMicrophoneCaptureWithFallback() {
-    const isWindows = process.platform === 'win32';
-
-    // rec and arecord don't exist on Windows — always fall back to sox with waveaudio
-    const fallbackPrograms = isWindows ? ['sox', 'sox'] : ['rec', 'arecord'];
+    const fallbackPrograms = ['rec', 'arecord'];
     const program = fallbackPrograms[this.retryCount - 1] || 'sox';
 
     logger.info(`Trying fallback recording program: ${program}`);
@@ -197,11 +184,7 @@ class SpeechService extends EventEmitter {
         threshold: 0,
         verbose: false,
         recordProgram: program,
-        silence: '10.0s',
-        ...(isWindows && {
-          audioType: 'waveaudio',
-          device: 'default',
-        }),
+        silence: '10.0s'
       });
 
       this.recording.stream().on('data', (chunk) => {
