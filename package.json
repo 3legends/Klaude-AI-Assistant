@@ -211,7 +211,7 @@
       "provider": "github",
       "owner": "3legends",
       "repo": "Klaude-AI-Assistant",
-      "releaseType": "release"
+      "releaseType": "draft"
     },
     "releaseInfo": {
       "releaseNotes": "Bug fixes and performance improvements."
