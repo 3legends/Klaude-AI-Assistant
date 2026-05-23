@@ -236,10 +236,18 @@ class WhisperService extends EventEmitter {
 
       logger.info('Executing whisper-cli', { cliPath, args: args.join(' ') });
 
+      // On Windows, whisper-cli.exe needs its DLLs (whisper.dll, ggml*.dll)
+      // in the same directory or on PATH. Add the cli directory to PATH.
+      const cliDir = path.dirname(cliPath);
+      const execEnv = { ...process.env };
+      if (process.platform === 'win32') {
+        execEnv.PATH = cliDir + ';' + (execEnv.PATH || '');
+      }
+
       execFile(cliPath, args, {
         timeout: 60000,
         maxBuffer: 10 * 1024 * 1024,
-        env: { ...process.env }
+        env: execEnv
       }, (err, stdout, stderr) => {
         // whisper-cli writes transcript to <audioFile>.txt
         const txtFile = audioFilePath + '.txt';
