@@ -65,13 +65,13 @@
       }
     ],
     "asarUnpack": [
-      "node_modules/nodejs-whisper/cpp/**/*",
+      "node_modules/**/*",
+      "node_modules/nodejs-whisper/**/*",
       "node_modules/ffmpeg-static/**/*",
-      "node_modules/tesseract.js/**/*",
       "node_modules/tesseract.js-core/**/*",
-      "node_modules/node-record-lpcm16/**/*",
       "resources/**/*",
-      "eng.traineddata"
+      "eng.traineddata",
+      "node_modules/tesseract.js/**/*"
     ],
     "mac": {
       "category": "public.app-category.productivity",
@@ -165,8 +165,7 @@
         "to": "whisper/macos-arm64",
         "filter": [
           "whisper-cli",
-          "ggml-base.en.bin",
-          "*.dylib"
+          "ggml-base.en.bin"
         ]
       },
       {
@@ -181,8 +180,7 @@
         "to": "whisper/macos-x64",
         "filter": [
           "whisper-cli",
-          "ggml-base.en.bin",
-          "*.dylib"
+          "ggml-base.en.bin"
         ]
       },
       {
@@ -213,7 +211,7 @@
       "provider": "github",
       "owner": "3legends",
       "repo": "Klaude-AI-Assistant",
-      "releaseType": "release"
+      "releaseType": "draft"
     },
     "releaseInfo": {
       "releaseNotes": "Bug fixes and performance improvements."
